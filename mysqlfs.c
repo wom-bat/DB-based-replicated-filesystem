@@ -18,7 +18,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <libgen.h>
-#include <fuse.h>
+#include <fuse3/fuse.h>
 #ifdef HAVE_MYSQL_MYSQL_H
 #include <mysql/mysql.h>
 #endif
@@ -54,6 +54,7 @@ static int mysqlfs_getattr(const char *path, struct stat *stbuf, struct fuse_fil
     ret = query_getattr(dbconn, path, stbuf);
     pool_put(dbconn);
 
+    fprintf(stderr, "inode %lu, mode %o\n", stbuf->st_ino, stbuf->st_mode);
     return ret;
 }
 
@@ -597,9 +598,9 @@ static void *mysqlfs_init(struct fuse_conn_info *conn,
      * inode -- resulting in an incorrect st_nlink value being
      * reported for any remaining hardlinks to this inode.
      */
-    cfg->entry_timeout = 60;
-    cfg->attr_timeout = 10;
-    cfg->negative_timeout = 10;
+    cfg->entry_timeout = 0;
+    cfg->attr_timeout = 0;
+    cfg->negative_timeout = 0;
 
     cfg->nullpath_ok = 0;
     return NULL;

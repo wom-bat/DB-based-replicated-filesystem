@@ -338,7 +338,7 @@ int query_mkdirentry(MYSQL *mysql, long inode, const char *name, long parent)
      */
     mysql_real_escape_string(mysql, esc_name, name, strlen(name));
     snprintf(sql, SQL_MAX,
-             "INSERT INTO tree (name, parent, inode) VALUES ('%s', %ld, %ld)",
+             "INSERT INTO tree (name, parent, inode) VALUES ('%s', %ld, %ld, 0)",
              esc_name, parent, inode);
 
     log_printf(LOG_D_SQL, "sql=%s\n", sql);
@@ -446,8 +446,8 @@ long query_mknod(MYSQL *mysql, const char *path, mode_t mode, dev_t rdev,
 
         mysql_real_escape_string(mysql, esc_name, name, strlen(name));
         snprintf(sql, SQL_MAX,
-                 "INSERT INTO tree (name, parent) VALUES ('%s', %ld)",
-                 esc_name, parent);
+                 "INSERT INTO tree (name, parent, mode) VALUES ('%s', %ld, %d)",
+                 esc_name, parent, mode);
 
         log_printf(LOG_D_SQL, "sql=%s\n", sql);
         ret = mysql_query(mysql, sql);
@@ -799,7 +799,7 @@ static int write_one_block(MYSQL *mysql, long inode,
             return -EIO;
         }
 
-        current_block_size = query_size_block(mysql, inode, seq);
+        current_block_size = 0;
     }
 
     stmt = mysql_stmt_init(mysql);
@@ -873,21 +873,6 @@ static int write_one_block(MYSQL *mysql, long inode,
     if (mysql_stmt_close(stmt))
 	log_printf(LOG_ERROR, "failed closing the statement: %s\n", mysql_stmt_error(stmt));
 
-    /* Update file size */
-    snprintf(sql, SQL_MAX,
-	     "UPDATE inodes SET size=("
-	     	"SELECT seq*%d + LENGTH(data) FROM data_blocks WHERE inode=%ld AND seq=("
-			"SELECT MAX(seq) FROM data_blocks WHERE inode=%ld"
-		")"
-	     ") "
-	     "WHERE inode=%ld",
-	     DATA_BLOCK_SIZE, inode, inode, inode);
-    log_printf(LOG_D_SQL, "sql=%s\n", sql);
-    if(mysql_query(mysql, sql)) {
-        log_printf(LOG_ERROR, "mysql_error: %s\n", mysql_error(mysql));
-        return -EIO;
-    }
-
     return size;
 
 err_out:
@@ -917,44 +902,49 @@ int query_write(MYSQL *mysql, long inode, const char *data, size_t size,
     unsigned long seq;
     const char *ptr;
     int ret, ret_size = 0;
+    char sql[SQL_MAX];
 
     fill_data_blocks_info(&info, size, offset);
 
     /* Handle first block */
-    lock_inode(mysql, inode);
     ret = write_one_block(mysql, inode, info.seq_first, data,
-			  info.length_first, info.offset_first);
-    unlock_inode(mysql, inode);
-    if (ret < 0)
-        return ret;
+                              info.length_first, info.offset_first);
     ret_size = ret;
-
-    /* Shortcut - if last block seq is the same as first block
-     * seq simply go away as it's the same block */
-    if (info.seq_first == info.seq_last)
-        return ret_size;
-
+    if (ret < 0 || info.seq_first == info.seq_last)
+        goto out;
+    
     ptr = data + info.length_first;
-
     /* Handle all full-sized intermediate blocks */
     for (seq = info.seq_first + 1; seq < info.seq_last; seq++) {
-        lock_inode(mysql, inode);
         ret = write_one_block(mysql, inode, seq, ptr, DATA_BLOCK_SIZE, 0);
-        unlock_inode(mysql, inode);
-        if (ret < 0)
-            return ret;
+        if (ret < 0) {
+            ret_size = ret;
+            goto out;
+        }
 	ptr += DATA_BLOCK_SIZE;
 	ret_size += ret;
     }
-
-    /* Handle last block */
-    lock_inode(mysql, inode);
     ret = write_one_block(mysql, inode, info.seq_last, ptr,
 			  info.length_last, 0);
-    unlock_inode(mysql, inode);
     if (ret < 0)
-        return ret;
-    ret_size += ret;
+        ret_size = ret;
+    else
+        ret_size += ret;
+out:
+    /* Update mtime and file size */
+    snprintf(sql, SQL_MAX,
+	     "UPDATE inodes SET mtime=UNIX_TIMESTAMP(NOW()), ctime=UNIX_TIMESTAMP(NOW()), size=("
+             "SELECT seq*%d + LENGTH(data) FROM data_blocks WHERE inode=%ld AND seq=("
+             "SELECT MAX(seq) FROM data_blocks WHERE inode=%ld"
+             ")"
+	     ") "
+	     "WHERE inode=%ld",
+	     DATA_BLOCK_SIZE, inode, inode, inode);
+    log_printf(LOG_D_SQL, "sql=%s\n", sql);
+    if (mysql_query(mysql, sql)) {
+        log_printf(LOG_ERROR, "mysql_error: %s\n", mysql_error(mysql));
+        return -EIO;
+    }
 
     return ret_size;
 }

@@ -61,9 +61,10 @@ DELIMITER ;
 
 DROP TABLE IF EXISTS `tree`;
 CREATE TABLE `tree` (
-  `inode` int(10) unsigned NOT NULL auto_increment,
-  `parent` int(10) unsigned default NULL,
-  `name` varchar(255) NOT NULL,
+  `inode` bigint(10) unsigned NOT NULL AUTO_INCREMENT,
+  `parent` bigint(10) unsigned default NULL,
+  `name` VARBINARY(255) NOT NULL,
+  `mode` int(11) default '0',
   UNIQUE KEY `name` (`name`,`parent`),
   KEY `inode` (`inode`),
   KEY `parent` (`parent`)
@@ -78,3 +79,8 @@ CREATE TABLE `tree` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
+GRANT SELECT, INSERT, UPDATE, DELETE ON mysqlfs.* TO mysqlfs@"localhost" IDENTIFIED BY 'password';
+FLUSH PRIVILEGES;
+insert into inodes values (
+1, 0, 0, 16895, 0, 0, 0, 0, 0, 0
+);
